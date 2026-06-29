@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 # alert_push.sh — OEM-side dispatcher.
-# Gathers the alert + enrichment (sessions, AWR), builds the JSON payload,
-# signs it with HMAC-SHA256 and POSTs it to the Hermes webhook.
+# Gathers the alert + enrichment (sessions, AWR), REDACTS sensitive data on
+# this host, signs the body with HMAC-SHA256 and POSTs it to the Hermes Agent
+# webhook adapter (route "oem-alert").
 #
 # OEM corrective-action / notification method calls this with the alert
 # fields as arguments or environment variables.
 #
 # Config via environment (no secrets in this file):
-#   HERMES_URL          e.g. https://<hermes-host>/webhook/oem   (placeholder)
-#   AGENT_WEBHOOK_SECRET shared HMAC secret (same as Hermes side)
+#   HERMES_URL      e.g. http://<hermes-host>:8644/webhooks/oem-alert
+#   WEBHOOK_SECRET  shared HMAC secret (same as the route `secret` in config.yaml)
+#   MASK_TERMS      optional comma-separated exact terms to mask (e.g. SID,schema)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 : "${HERMES_URL:?set HERMES_URL}"
-: "${AGENT_WEBHOOK_SECRET:?set AGENT_WEBHOOK_SECRET}"
+: "${WEBHOOK_SECRET:?set WEBHOOK_SECRET}"
+MASK_TERMS="${MASK_TERMS:-}"
 
 ALERT_TYPE="${ALERT_TYPE:-threshold}"
 TARGET_NAME="${TARGET_NAME:-unknown}"
@@ -38,6 +41,16 @@ case "$ALERT_TYPE" in
         ;;
 esac
 
+# --- Redact sensitive data ON THIS HOST before anything leaves it. ---
+# IPs, hostnames, domains, secrets become opaque placeholders. The agent and
+# the LLM only ever see the masked form.
+REDACT=(python3 "$SCRIPT_DIR/redact.py")
+[[ -n "$MASK_TERMS" ]] && REDACT+=(--terms "$MASK_TERMS")
+MESSAGE="$(printf '%s' "$MESSAGE" | "${REDACT[@]}")"
+SESSION_TEXT="$(printf '%s' "$SESSION_TEXT" | "${REDACT[@]}")"
+AWR_TEXT="$(printf '%s' "$AWR_TEXT" | "${REDACT[@]}")"
+METRIC_VALUE="$(printf '%s' "$METRIC_VALUE" | "${REDACT[@]}")"
+
 # Build JSON payload safely with jq.
 PAYLOAD="$(jq -nc \
     --arg alert_type "$ALERT_TYPE" \
@@ -56,13 +69,13 @@ PAYLOAD="$(jq -nc \
       session_text:($session_text|select(.!="")),
       awr_text:($awr_text|select(.!=""))}')"
 
-# HMAC-SHA256 over the raw body.
-SIG="sha256=$(printf '%s' "$PAYLOAD" \
-    | openssl dgst -sha256 -hmac "$AGENT_WEBHOOK_SECRET" -binary \
+# Generic Hermes webhook HMAC: header "X-Webhook-Signature" = raw hex digest.
+SIG="$(printf '%s' "$PAYLOAD" \
+    | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -binary \
     | xxd -p -c 256)"
 
 curl -fsS -X POST "$HERMES_URL" \
     -H "Content-Type: application/json" \
-    -H "X-Hermes-Signature: $SIG" \
+    -H "X-Webhook-Signature: $SIG" \
     --data-binary "$PAYLOAD"
 echo

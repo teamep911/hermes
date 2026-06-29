@@ -1,0 +1,22 @@
+[Unit]
+Description=Hermes Agent gateway (OEM Oracle alert RCA -> Google Chat)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hermes
+Group=hermes
+# HERMES_HOME points at the config/secrets/skills dir (~/.hermes by default).
+Environment=HERMES_HOME=/home/hermes/.hermes
+# Runs the messaging gateway (webhook adapter + Google Chat) headless.
+ExecStart=/usr/local/bin/hermes gateway run
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

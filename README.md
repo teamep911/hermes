@@ -1,83 +1,87 @@
-# Hermes Agent
+# Hermes — OEM Oracle monitoring on Nous Hermes Agent
 
-LLM-assisted RCA gateway for Oracle / OEM alerts.
+This repo is **not** a custom agent. It is the deployment kit that turns
+[Nous Research **Hermes Agent**](https://github.com/NousResearch/hermes-agent)
+into an Oracle/OEM incident-RCA assistant: OEM pushes an alert → Hermes runs the
+right Oracle skill with its built-in memory and your Claude model → the result
+lands in a Google Chat space.
+
+Webhook ingestion (with HMAC), skills, persistent memory, multi-model routing and
+Google Chat are **native Hermes features** — we only supply the Oracle-specific
+pieces.
 
 ```
-OEM host (Oracle · Linux)                Hermes Agent host (Linux VPS · hermes-gateway systemd)
-┌─────────────────────────┐              ┌────────────────────────────────────────────────────┐
-│ threshold / lock alert  │   HTTP POST  │ Webhook receiver  (HMAC-SHA256)                      │
-│ awr_export.sh           │  ─────────►  │   ▼                                                  │
-│ check_session.sh        │   (1 payload)│ Redactor  → mask IP / host / domain / secrets        │
-│ alert_push.sh → curl    │              │   ▼                                                  │
-└─────────────────────────┘              │ Memory (pgvector): incident history · similar errors │
-                                         │   ▼                                                  │
-                                         │ Skills: analyze_alert · rca_oracle · awr_summary     │
-                                         │   ▼                                                  │
-                                         │ LLM analysis: Claude → Gemini → OpenRouter (fallback)│
-                                         │   ▼                                                  │
-                                         │ Response formatter (markdown / Cards v2)             │
-                                         │   ▼                                                  │
-                                         │ Google Chat toolset ─────────────► Google Chat space │
-                                         └────────────────────────────────────────────────────┘
+OEM / DB host (Oracle · Linux)             Hermes Agent gateway (Linux VPS, systemd)
+┌──────────────────────────────┐          ┌─────────────────────────────────────────────┐
+│ threshold / lock alert        │          │ webhook adapter  /webhooks/oem-alert (HMAC)   │
+│ awr_export.sh · check_session │  POST    │   ▼                                           │
+│ redact.py  (mask IP/host/...) │ ───────► │ skill: alert-triage | oracle-rca | awr-summary│
+│ alert_push.sh → curl          │ (masked) │   ▼  (your Anthropic/Claude key)              │
+└──────────────────────────────┘          │ Hermes memory: past incidents / similar errors│
+                                           │   ▼                                           │
+                                           │ Google Chat (Pub/Sub + Chat REST, 2-way)      │
+                                           └─────────────────────────────────────────────┘
 ```
 
-## Why this design
-
-- **Single VPS topology.** Webhook + analysis + Google Chat delivery run in one
-  `hermes-gateway` process — one fewer HMAC hop than the old split agent/gateway.
-- **LLM RCA, not static templates.** Each alert is analysed by a skill backed by
-  a real LLM with recalled context, instead of a fixed rule template.
-- **Security first.** Oracle context (AWR, sessions, messages) is **redacted**
-  (IPs, hostnames, domains, secrets → opaque placeholders) *before* any byte
-  leaves for an external provider. Only redacted text is stored in the DB.
-- **Prompt-chain, not an agent loop.** OEM ships a full payload; the skill makes a
-  single structured LLM call. Simple, cheap, predictable.
-
-## Components
+## What this repo provides
 
 | Path | Role |
 |------|------|
-| `hermes/main.py` | FastAPI app: `/webhook/oem`, `/health` |
-| `hermes/security/` | HMAC auth + redactor (masking) |
-| `hermes/llm/` | Provider router: Claude (default) → Gemini → OpenRouter |
-| `hermes/skills/` | `analyze_alert`, `rca_oracle`, `awr_summary` |
-| `hermes/memory/` | pgvector recall + persist, embeddings |
-| `hermes/pipeline.py` | Orchestrates redact → recall → skill → persist → deliver |
-| `hermes/formatter.py` | RcaResult → markdown / Google Chat Cards v2 |
-| `hermes/chat/` | Google Chat outbound toolset |
-| `scripts/` | OEM-side collectors: `awr_export.sh`, `check_session.sh`, `alert_push.sh` |
-| `infra/sql/schema.sql` | PostgreSQL + pgvector schema |
-| `infra/systemd/` | `hermes-gateway.service` |
+| `scripts/awr_export.sh` | Generate a trimmed text AWR report (OEM host) |
+| `scripts/check_session.sh` | Dump blocking/locking sessions (OEM host) |
+| `scripts/redact.py` | **Mask IP/host/domain/secrets on the DB host** (stdlib only) |
+| `scripts/alert_push.sh` | Redact → build payload → HMAC-sign → POST to Hermes |
+| `skills/oracle/alert-triage/` | Generic OEM alert triage skill |
+| `skills/oracle/oracle-rca/` | Lock / blocking-session RCA skill |
+| `skills/oracle/awr-summary/` | AWR performance summary skill |
+| `deploy/config.yaml` | Hermes config: Claude model + `oem-alert` webhook route |
+| `deploy/hermes.env.example` | Secrets template (`~/.hermes/.env`) |
+| `deploy/hermes-gateway.service` | systemd unit for the headless gateway |
 
-## Setup
+## Security model
+
+- **Masking happens on the OEM/DB host** (`redact.py`), *before* the payload ever
+  leaves. The agent and the LLM only see opaque placeholders (`<IP_1>`, `<HOST_2>`).
+- **Your own Claude key.** `deploy/config.yaml` sets `model.provider: anthropic`
+  with `ANTHROPIC_API_KEY` from `~/.hermes/.env` — billed pay-per-token on your
+  org, not routed through Nous Portal.
+- **Inbound HMAC.** The OEM payload is signed (`X-Webhook-Signature`) with a shared
+  `WEBHOOK_SECRET`; Hermes rejects unsigned requests.
+- Secrets live only in `~/.hermes/.env`; this repo ships placeholders.
+
+## Deploy (gateway host)
 
 ```bash
-python3.11 -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
+# 1. Install Hermes Agent (see its docs / releases), then:
+mkdir -p ~/.hermes/skills/oracle
+cp -r skills/oracle/* ~/.hermes/skills/oracle/
+cp deploy/config.yaml ~/.hermes/config.yaml
+cp deploy/hermes.env.example ~/.hermes/.env && chmod 600 ~/.hermes/.env
+# fill in ANTHROPIC_API_KEY, WEBHOOK_SECRET, GOOGLE_CHAT_* in ~/.hermes/.env
 
-cp .env.example .env.runtime && chmod 600 .env.runtime   # fill in secrets
+# 2. Provision Google Chat (service account + Pub/Sub subscription):
+hermes gateway setup
 
-createdb hermes
-psql hermes -f infra/sql/schema.sql
-
-uvicorn hermes.main:app --host 0.0.0.0 --port 2020
+# 3. Run headless:
+sudo cp deploy/hermes-gateway.service /etc/systemd/system/
+sudo systemctl enable --now hermes-gateway
 ```
 
-Set at minimum: `AGENT_WEBHOOK_SECRET`, `PG_DSN`, one LLM API key
-(`ANTHROPIC_API_KEY`), and `GOOGLE_CHAT_WEBHOOK_URL`.
+## OEM host
 
-## Configuration
-
-All hostnames, IPs, domains and secrets come from `.env.runtime` (git-ignored).
-The repository ships only `.env.example` with placeholders. See it for the full
-list. Cost controls: `LLM_MIN_SEVERITY` (severity gate) and `DEDUP_WINDOW_SECONDS`
-(skip repeated signatures).
+```bash
+# Copy scripts/ to the DB host. The OEM notification method runs:
+HERMES_URL=http://<hermes-host>:8644/webhooks/oem-alert \
+WEBHOOK_SECRET=<same-as-config> \
+ALERT_TYPE=lock TARGET_NAME=<db> SEVERITY=critical MESSAGE="ORA-00060 ..." \
+  ./scripts/alert_push.sh
+```
 
 ## Tests
 
 ```bash
-pytest -q
+python3 -m pytest tests/ -q     # masking: no-leak + stable placeholders
 ```
 
-`tests/test_redactor.py` includes a no-leak assertion that fails if any IP /
-host / domain survives redaction.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design and the open
+items still to confirm against the installed Hermes version.
