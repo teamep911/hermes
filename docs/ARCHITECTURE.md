@@ -48,19 +48,33 @@ The earlier "incoming-webhook is send-only" limitation does not apply here: with
 Hermes, slash commands / replies from Chat back to the agent work out of the box
 once `hermes gateway setup` is run.
 
-## Open items to confirm against the installed Hermes version
+## Verified against the installed Hermes Agent v0.17.0
 
-- **`deliver` key for Google Chat.** Confirm the exact delivery identifier (and
-  whether a `space`/channel must be passed in `deliver_extra`) for the webhook
-  route. Google Chat is provisioned via `hermes gateway setup`; the route may
-  instead post to `GOOGLE_CHAT_HOME_CHANNEL`.
-- **Large AWR payloads.** `{__raw__}` is truncated at ~4000 chars; we reference
-  named fields (`{awr_text}`) instead. Confirm named fields are not truncated; if
-  they are, have the skill pull AWR in chunks or pre-summarise on the OEM host
-  (`awr_export.sh` already trims to ~60 KB).
-- **Dedup / cost control.** The legacy design had a severity gate + dedup window.
-  Decide whether to enforce these on the OEM side (only call `alert_push.sh` for
-  severe/new alerts) or via Hermes config.
+Confirmed by reading the installed source (`/usr/local/lib/hermes-agent`):
+
+- **Generic HMAC** — header `X-Webhook-Signature` = `hex(HMAC-SHA256(body))`
+  (no `sha256=` prefix). `alert_push.sh` produces exactly this; openssl↔python
+  interop test passes.
+- **`deliver: google_chat`** — valid. Google Chat is a registered platform plugin
+  (`Platform("google_chat")`); webhook delivery routes cross-platform to
+  `deliver_extra.chat_id`, falling back to `GOOGLE_CHAT_HOME_CHANNEL`. The plugin
+  must be connected (its `GOOGLE_CHAT_*` env set + gateway running).
+- **AWR truncation** — a named string field like `{awr_text}` is **not** truncated
+  (`str(value)`); only `{__raw__}` (4000 chars) and dict/list fields (2000 chars)
+  are. So full AWR text passes through. `awr_export.sh` still trims to ~60 KB to
+  bound model cost.
+- **`${VAR}` interpolation** in config.yaml works (`_expand_env_vars`), so
+  `secret: ${WEBHOOK_SECRET}` resolves from `~/.hermes/.env`.
+- **Skills** install under `~/.hermes/skills/oracle/<name>/SKILL.md` and show as
+  `enabled` in `hermes skills list`.
+- **Model** is already `provider: custom` → internal OpenAI-compatible endpoint;
+  this deployment leaves it untouched (don't overwrite config.yaml).
+
+## Still a deployment decision
+
+- **Dedup / cost control.** Enforce a severity gate + dedup on the OEM side (only
+  call `alert_push.sh` for severe/new alerts), since Hermes runs the agent on
+  every accepted POST.
 
 ## What was removed
 

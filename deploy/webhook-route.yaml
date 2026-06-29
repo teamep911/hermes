@@ -1,0 +1,43 @@
+# MERGE this block into your existing ~/.hermes/config.yaml.
+# Do NOT copy it over the whole file — your config already has the model
+# (custom internal endpoint), memory and other settings that must stay.
+#
+# Verified against Hermes Agent v0.17.0:
+#   - generic HMAC header is "X-Webhook-Signature" = hex(HMAC-SHA256(body))
+#   - ${VAR} env interpolation works, so `secret: ${WEBHOOK_SECRET}` is fine
+#   - `deliver: google_chat` is a registered platform plugin; the response is
+#     routed cross-platform to deliver_extra.chat_id, falling back to
+#     GOOGLE_CHAT_HOME_CHANNEL when chat_id is empty
+#   - named string fields (e.g. {awr_text}) are NOT truncated; only {__raw__}
+#     (4000 chars) and dict/list fields (2000 chars) are
+
+platforms:
+  webhook:
+    enabled: true
+    extra:
+      port: 8644
+      routes:
+        oem-alert:
+          events: []                      # accept any event on this route
+          secret: ${WEBHOOK_SECRET}       # required per route
+          skills: [alert-triage, oracle-rca, awr-summary]
+          prompt: |
+            Bạn nhận một cảnh báo OEM Oracle (dữ liệu đã được che). Chọn skill
+            phù hợp và đưa ra RCA ngắn gọn, có hành động cụ thể.
+
+            alert_type: {alert_type}
+            target:     {target_name}
+            metric:     {metric_name} = {metric_value}
+            severity:   {severity}
+            time:       {event_time}
+            message:    {message}
+
+            === Session / lock dump (nếu có) ===
+            {session_text}
+
+            === AWR (đã cắt gọn, nếu có) ===
+            {awr_text}
+          deliver: google_chat
+          deliver_extra:
+            # Target space; falls back to GOOGLE_CHAT_HOME_CHANNEL if omitted.
+            chat_id: ${GOOGLE_CHAT_HOME_CHANNEL}

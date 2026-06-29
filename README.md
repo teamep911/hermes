@@ -34,7 +34,7 @@ OEM / DB host (Oracle · Linux)             Hermes Agent gateway (Linux VPS, sys
 | `skills/oracle/alert-triage/` | Generic OEM alert triage skill |
 | `skills/oracle/oracle-rca/` | Lock / blocking-session RCA skill |
 | `skills/oracle/awr-summary/` | AWR performance summary skill |
-| `deploy/config.yaml` | Hermes config: Claude model + `oem-alert` webhook route |
+| `deploy/webhook-route.yaml` | `oem-alert` webhook route to MERGE into config.yaml |
 | `deploy/hermes.env.example` | Secrets template (`~/.hermes/.env`) |
 | `deploy/hermes-gateway.service` | systemd unit for the headless gateway |
 
@@ -42,27 +42,37 @@ OEM / DB host (Oracle · Linux)             Hermes Agent gateway (Linux VPS, sys
 
 - **Masking happens on the OEM/DB host** (`redact.py`), *before* the payload ever
   leaves. The agent and the LLM only see opaque placeholders (`<IP_1>`, `<HOST_2>`).
-- **Your own Claude key.** `deploy/config.yaml` sets `model.provider: anthropic`
-  with `ANTHROPIC_API_KEY` from `~/.hermes/.env` — billed pay-per-token on your
-  org, not routed through Nous Portal.
-- **Inbound HMAC.** The OEM payload is signed (`X-Webhook-Signature`) with a shared
-  `WEBHOOK_SECRET`; Hermes rejects unsigned requests.
+- **Your own model endpoint.** Hermes is already configured with
+  `model.provider: custom` pointing at an internal OpenAI-compatible endpoint —
+  the (already-masked) data never goes to a public provider. This deployment does
+  **not** change that.
+- **Inbound HMAC.** The OEM payload is signed (`X-Webhook-Signature` = hex
+  HMAC-SHA256) with a shared `WEBHOOK_SECRET`; Hermes rejects unsigned requests.
+  (openssl↔python interop verified.)
 - Secrets live only in `~/.hermes/.env`; this repo ships placeholders.
 
 ## Deploy (gateway host)
 
+Verified against Hermes Agent **v0.17.0**.
+
 ```bash
-# 1. Install Hermes Agent (see its docs / releases), then:
+# 1. Install the Oracle skills (category "oracle"):
 mkdir -p ~/.hermes/skills/oracle
 cp -r skills/oracle/* ~/.hermes/skills/oracle/
-cp deploy/config.yaml ~/.hermes/config.yaml
-cp deploy/hermes.env.example ~/.hermes/.env && chmod 600 ~/.hermes/.env
-# fill in ANTHROPIC_API_KEY, WEBHOOK_SECRET, GOOGLE_CHAT_* in ~/.hermes/.env
+hermes skills list | grep oracle        # -> alert-triage / awr-summary / oracle-rca, enabled
 
-# 2. Provision Google Chat (service account + Pub/Sub subscription):
+# 2. MERGE the webhook route into your existing config (do NOT overwrite it —
+#    your model/memory settings must stay). See deploy/webhook-route.yaml.
+$EDITOR ~/.hermes/config.yaml           # paste the platforms.webhook block
+
+# 3. Add secrets:
+cat deploy/hermes.env.example >> ~/.hermes/.env && chmod 600 ~/.hermes/.env
+# fill in WEBHOOK_SECRET and GOOGLE_CHAT_* (the model endpoint is already set)
+
+# 4. Provision Google Chat (service account + Pub/Sub subscription):
 hermes gateway setup
 
-# 3. Run headless:
+# 5. Run headless:
 sudo cp deploy/hermes-gateway.service /etc/systemd/system/
 sudo systemctl enable --now hermes-gateway
 ```
