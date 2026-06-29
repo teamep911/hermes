@@ -70,9 +70,11 @@ PAYLOAD="$(jq -nc \
       awr_text:($awr_text|select(.!=""))}')"
 
 # Generic Hermes webhook HMAC: header "X-Webhook-Signature" = raw hex digest.
+# `awk '{print $NF}'` grabs the hex from openssl's "...= <hex>" output, so we
+# don't depend on xxd being installed on the OEM host.
 SIG="$(printf '%s' "$PAYLOAD" \
-    | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -binary \
-    | xxd -p -c 256)"
+    | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" \
+    | awk '{print $NF}')"
 
 curl -fsS -X POST "$HERMES_URL" \
     -H "Content-Type: application/json" \
