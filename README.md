@@ -3,12 +3,14 @@
 This repo is **not** a custom agent. It is the deployment kit that turns
 [Nous Research **Hermes Agent**](https://github.com/NousResearch/hermes-agent)
 into an Oracle/OEM incident-RCA assistant: OEM pushes an alert → Hermes runs the
-right Oracle skill with its built-in memory and your Claude model → the result
-lands in a Google Chat space.
+right Oracle skill with its built-in memory and your own model endpoint → the
+result is delivered to a Google Chat space.
 
-Webhook ingestion (with HMAC), skills, persistent memory, multi-model routing and
-Google Chat are **native Hermes features** — we only supply the Oracle-specific
-pieces.
+Webhook ingestion (with HMAC), skills, persistent memory and model routing are
+**native Hermes features**; we supply the Oracle-specific pieces. Google Chat is
+delivered via the space **incoming webhook** (one-way, no GCP project) using the
+`notify-google-chat` skill — the native Chat plugin needs Pub/Sub+GCP, which this
+deployment avoids.
 
 ```
 OEM / DB host (Oracle · Linux)             Hermes Agent gateway (Linux VPS, systemd)
@@ -16,10 +18,10 @@ OEM / DB host (Oracle · Linux)             Hermes Agent gateway (Linux VPS, sys
 │ threshold / lock alert        │          │ webhook adapter  /webhooks/oem-alert (HMAC)   │
 │ awr_export.sh · check_session │  POST    │   ▼                                           │
 │ redact.py  (mask IP/host/...) │ ───────► │ skill: alert-triage | oracle-rca | awr-summary│
-│ alert_push.sh → curl          │ (masked) │   ▼  (your Anthropic/Claude key)              │
+│ alert_push.sh → curl          │ (masked) │   ▼  (your own model endpoint)                │
 └──────────────────────────────┘          │ Hermes memory: past incidents / similar errors│
                                            │   ▼                                           │
-                                           │ Google Chat (Pub/Sub + Chat REST, 2-way)      │
+                                           │ notify-google-chat skill → incoming webhook ──┼──► Google Chat space
                                            └─────────────────────────────────────────────┘
 ```
 
@@ -34,6 +36,7 @@ OEM / DB host (Oracle · Linux)             Hermes Agent gateway (Linux VPS, sys
 | `skills/oracle/alert-triage/` | Generic OEM alert triage skill |
 | `skills/oracle/oracle-rca/` | Lock / blocking-session RCA skill |
 | `skills/oracle/awr-summary/` | AWR performance summary skill |
+| `skills/oracle/notify-google-chat/` | Deliver the RCA to Google Chat via incoming webhook (`scripts/gchat_send.sh`) |
 | `deploy/webhook-route.yaml` | `oem-alert` webhook route to MERGE into config.yaml |
 | `deploy/hermes.env.example` | Secrets template (`~/.hermes/.env`) |
 | `deploy/hermes-gateway.service` | systemd unit for the headless gateway |
@@ -65,12 +68,12 @@ hermes skills list | grep oracle        # -> alert-triage / awr-summary / oracle
 #    your model/memory settings must stay). See deploy/webhook-route.yaml.
 $EDITOR ~/.hermes/config.yaml           # paste the platforms.webhook block
 
-# 3. Add secrets:
-cat deploy/hermes.env.example >> ~/.hermes/.env && chmod 600 ~/.hermes/.env
-# fill in WEBHOOK_SECRET and GOOGLE_CHAT_* (the model endpoint is already set)
+# 3. Create a Google Chat incoming webhook in the target space
+#    (Apps & integrations -> Webhooks -> Add). Copy its URL.
 
-# 4. Provision Google Chat (service account + Pub/Sub subscription):
-hermes gateway setup
+# 4. Add secrets:
+cat deploy/hermes.env.example >> ~/.hermes/.env && chmod 600 ~/.hermes/.env
+# fill in WEBHOOK_SECRET and GOOGLE_CHAT_WEBHOOK_URL (the model endpoint is already set)
 
 # 5. Run headless:
 sudo cp deploy/hermes-gateway.service /etc/systemd/system/

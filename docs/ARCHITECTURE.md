@@ -13,8 +13,8 @@ Hermes to do the rest.
 | Webhook receiver | Webhook adapter: HTTP server, HMAC validation, payload→prompt |
 | Skills | agentskills.io `SKILL.md` skills in `~/.hermes/skills/` |
 | Memory | Agent-curated memory + FTS5 cross-session recall |
-| LLM analysis | `model.provider: anthropic` with your own key |
-| Google Chat | Native channel (Pub/Sub inbound + Chat REST outbound) |
+| LLM analysis | `model.provider: custom` → your own internal endpoint |
+| Google Chat | Space **incoming webhook** via the `notify-google-chat` skill (no GCP) |
 | hermes-gateway (systemd) | `hermes gateway run`, headless |
 
 ## Flow
@@ -28,25 +28,34 @@ Hermes to do the rest.
    `http://<gateway>:8644/webhooks/oem-alert`.
 4. **Ingest (Hermes).** The webhook adapter verifies the signature and renders the
    `prompt` template (`deploy/config.yaml`) from payload fields.
-5. **Reason (Hermes).** The route loads the three Oracle skills; the agent picks
-   one by its "When to Use" section and calls your Claude model. Hermes memory
-   supplies similar past incidents automatically.
-6. **Deliver.** The analysis is sent to the Google Chat space.
+5. **Reason (Hermes).** The route loads the Oracle skills; the agent picks the
+   analysis skill by its "When to Use" section and calls your own model endpoint.
+   Hermes memory supplies similar past incidents automatically.
+6. **Deliver.** As the mandatory final step the agent runs the
+   `notify-google-chat` skill, which POSTs the RCA to the space incoming webhook
+   (`GOOGLE_CHAT_WEBHOOK_URL`). The route's own `deliver` is `log`.
 
 ## Skill selection
 
-The route loads all three skills and lets the agent choose:
+The route loads four skills. The agent chooses an analysis skill, then always
+runs the delivery skill:
 - lock / blocking / session dump → `oracle-rca`
 - CPU/IO/memory threshold with AWR → `awr-summary`
 - everything else → `alert-triage`
+- then, always → `notify-google-chat`
 
-## Google Chat is bidirectional (no extra work)
+## Google Chat delivery: incoming webhook (no GCP)
 
-Hermes' Google Chat channel uses **Cloud Pub/Sub pull** for inbound and the
-**Chat REST API** for outbound via a service account — no public endpoint needed.
-The earlier "incoming-webhook is send-only" limitation does not apply here: with
-Hermes, slash commands / replies from Chat back to the agent work out of the box
-once `hermes gateway setup` is run.
+The user has Google Workspace but no GCP project. Hermes' native `google_chat`
+plugin needs a GCP project + service account + Cloud Pub/Sub, so it is **not
+used**. Instead the `notify-google-chat` skill calls `scripts/gchat_send.sh`,
+which POSTs a Chat message to the space **incoming webhook URL** — created in the
+space (Apps & integrations → Webhooks), no GCP needed.
+
+This path is **one-way** (send only); there is no reverse Chat→agent channel,
+which matches the agreed scope. The trade-off vs a `deliver` target: delivery
+depends on the agent running the skill, so the route prompt makes it a mandatory
+final step.
 
 ## Verified against the installed Hermes Agent v0.17.0
 
@@ -55,10 +64,10 @@ Confirmed by reading the installed source (`/usr/local/lib/hermes-agent`):
 - **Generic HMAC** — header `X-Webhook-Signature` = `hex(HMAC-SHA256(body))`
   (no `sha256=` prefix). `alert_push.sh` produces exactly this; openssl↔python
   interop test passes.
-- **`deliver: google_chat`** — valid. Google Chat is a registered platform plugin
-  (`Platform("google_chat")`); webhook delivery routes cross-platform to
-  `deliver_extra.chat_id`, falling back to `GOOGLE_CHAT_HOME_CHANNEL`. The plugin
-  must be connected (its `GOOGLE_CHAT_*` env set + gateway running).
+- **Google Chat delivery** — the native `google_chat` platform plugin only does
+  the Chat REST API via a service account (needs a GCP project + Pub/Sub), so it
+  is not usable here. There is no generic HTTP/webhook `deliver` target either.
+  Hence delivery goes through the `notify-google-chat` skill → incoming webhook.
 - **AWR truncation** — a named string field like `{awr_text}` is **not** truncated
   (`str(value)`); only `{__raw__}` (4000 chars) and dict/list fields (2000 chars)
   are. So full AWR text passes through. `awr_export.sh` still trims to ~60 KB to
