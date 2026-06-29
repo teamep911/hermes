@@ -8,9 +8,11 @@ result is delivered to a Google Chat space.
 
 Webhook ingestion (with HMAC), skills, persistent memory and model routing are
 **native Hermes features**; we supply the Oracle-specific pieces. Google Chat is
-delivered via the space **incoming webhook** (one-way, no GCP project) using the
-`notify-google-chat` skill — the native Chat plugin needs Pub/Sub+GCP, which this
-deployment avoids.
+delivered via the space **incoming webhook** (one-way, no GCP project) using a
+small bundled platform plugin (`deploy/plugins/gchat_webhook`) wired as the
+route's `deliver` target — the native Chat plugin needs Pub/Sub+GCP, which this
+deployment avoids. Delivery is deterministic (handled at the gateway deliver
+layer, not by the agent choosing to call a tool). Verified end-to-end on v0.17.0.
 
 ```
 OEM / DB host (Oracle · Linux)             Hermes Agent gateway (Linux VPS, systemd)
@@ -21,8 +23,8 @@ OEM / DB host (Oracle · Linux)             Hermes Agent gateway (Linux VPS, sys
 │ alert_push.sh → curl          │ (masked) │   ▼  (your own model endpoint)                │
 └──────────────────────────────┘          │ Hermes memory: past incidents / similar errors│
                                            │   ▼                                           │
-                                           │ notify-google-chat skill → incoming webhook ──┼──► Google Chat space
-                                           └─────────────────────────────────────────────┘
+                                           │ deliver: gchat_webhook plugin ────────────────┼──► Google Chat space
+                                           └─────────────────────────────────────────────┘     (incoming webhook)
 ```
 
 ## What this repo provides
@@ -36,7 +38,7 @@ OEM / DB host (Oracle · Linux)             Hermes Agent gateway (Linux VPS, sys
 | `skills/oracle/alert-triage/` | Generic OEM alert triage skill |
 | `skills/oracle/oracle-rca/` | Lock / blocking-session RCA skill |
 | `skills/oracle/awr-summary/` | AWR performance summary skill |
-| `skills/oracle/notify-google-chat/` | Deliver the RCA to Google Chat via incoming webhook (`scripts/gchat_send.sh`) |
+| `deploy/plugins/gchat_webhook/` | Send-only Google Chat platform plugin (incoming webhook) → `deliver: gchat_webhook` |
 | `deploy/webhook-route.yaml` | `oem-alert` webhook route to MERGE into config.yaml |
 | `deploy/hermes.env.example` | Secrets template (`~/.hermes/.env`) |
 | `deploy/hermes-gateway.service` | systemd unit for the headless gateway |
@@ -64,18 +66,25 @@ mkdir -p ~/.hermes/skills/oracle
 cp -r skills/oracle/* ~/.hermes/skills/oracle/
 hermes skills list | grep oracle        # -> alert-triage / awr-summary / oracle-rca, enabled
 
-# 2. MERGE the webhook route into your existing config (do NOT overwrite it —
-#    your model/memory settings must stay). See deploy/webhook-route.yaml.
-$EDITOR ~/.hermes/config.yaml           # paste the platforms.webhook block
+# 2. Install + enable the Google Chat delivery plugin:
+mkdir -p ~/.hermes/plugins/gchat_webhook
+cp deploy/plugins/gchat_webhook/* ~/.hermes/plugins/gchat_webhook/
+hermes plugins enable gchat_webhook-platform
 
 # 3. Create a Google Chat incoming webhook in the target space
 #    (Apps & integrations -> Webhooks -> Add). Copy its URL.
 
 # 4. Add secrets:
 cat deploy/hermes.env.example >> ~/.hermes/.env && chmod 600 ~/.hermes/.env
-# fill in WEBHOOK_SECRET and GOOGLE_CHAT_WEBHOOK_URL (the model endpoint is already set)
+# fill in GOOGLE_CHAT_WEBHOOK_URL (the model endpoint is already set)
 
-# 5. Run headless:
+# 5. MERGE the webhook route into your existing config (do NOT overwrite it —
+#    your model/memory settings must stay). See deploy/webhook-route.yaml.
+#    Put the HMAC secret LITERALLY in the route's `secret:` (env interpolation
+#    is not applied to platform config under systemd).
+$EDITOR ~/.hermes/config.yaml           # paste the plugins.enabled + platforms.webhook blocks
+
+# 6. Run headless:
 sudo cp deploy/hermes-gateway.service /etc/systemd/system/
 sudo systemctl enable --now hermes-gateway
 ```

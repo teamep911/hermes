@@ -14,7 +14,7 @@ Hermes to do the rest.
 | Skills | agentskills.io `SKILL.md` skills in `~/.hermes/skills/` |
 | Memory | Agent-curated memory + FTS5 cross-session recall |
 | LLM analysis | `model.provider: custom` → your own internal endpoint |
-| Google Chat | Space **incoming webhook** via the `notify-google-chat` skill (no GCP) |
+| Google Chat | Space **incoming webhook** via the bundled `gchat_webhook` deliver plugin (no GCP) |
 | hermes-gateway (systemd) | `hermes gateway run`, headless |
 
 ## Flow
@@ -27,35 +27,43 @@ Hermes to do the rest.
 3. **Sign + POST.** HMAC-SHA256 over the body, header `X-Webhook-Signature`, to
    `http://<gateway>:8644/webhooks/oem-alert`.
 4. **Ingest (Hermes).** The webhook adapter verifies the signature and renders the
-   `prompt` template (`deploy/config.yaml`) from payload fields.
+   `prompt` template (`deploy/webhook-route.yaml`) from payload fields.
 5. **Reason (Hermes).** The route loads the Oracle skills; the agent picks the
    analysis skill by its "When to Use" section and calls your own model endpoint.
    Hermes memory supplies similar past incidents automatically.
-6. **Deliver.** As the mandatory final step the agent runs the
-   `notify-google-chat` skill, which POSTs the RCA to the space incoming webhook
-   (`GOOGLE_CHAT_WEBHOOK_URL`). The route's own `deliver` is `log`.
+6. **Deliver.** The route's `deliver: gchat_webhook` sends the **full** agent
+   response to the Google Chat space incoming webhook. This happens at the
+   gateway deliver layer — deterministic, independent of whether the agent
+   chose to call a tool.
 
 ## Skill selection
 
-The route loads four skills. The agent chooses an analysis skill, then always
-runs the delivery skill:
+The route loads three analysis skills; the agent picks one by its "When to Use":
 - lock / blocking / session dump → `oracle-rca`
 - CPU/IO/memory threshold with AWR → `awr-summary`
 - everything else → `alert-triage`
-- then, always → `notify-google-chat`
 
-## Google Chat delivery: incoming webhook (no GCP)
+(On a local model that doesn't tool-call, the webhook auto-invokes the first
+skill's context; the agent still produces a full RCA. Delivery is handled by the
+plugin, not a skill.)
+
+## Google Chat delivery: incoming webhook via a platform plugin (no GCP)
 
 The user has Google Workspace but no GCP project. Hermes' native `google_chat`
 plugin needs a GCP project + service account + Cloud Pub/Sub, so it is **not
-used**. Instead the `notify-google-chat` skill calls `scripts/gchat_send.sh`,
-which POSTs a Chat message to the space **incoming webhook URL** — created in the
-space (Apps & integrations → Webhooks), no GCP needed.
+used**. There is also no generic HTTP `deliver` target, and delivery via an
+agent-run skill proved unreliable (the local model returns text without calling
+the tool — observed `tool_turns=0`).
+
+So this repo ships a tiny **send-only platform plugin**,
+`deploy/plugins/gchat_webhook`, modelled on the bundled `ntfy` adapter. It
+registers `Platform("gchat_webhook")` whose `send()` POSTs `{"text": ...}` to the
+space **incoming webhook URL** (`GOOGLE_CHAT_WEBHOOK_URL`). Wired as
+`deliver: gchat_webhook`, the gateway delivers the full response deterministically.
 
 This path is **one-way** (send only); there is no reverse Chat→agent channel,
-which matches the agreed scope. The trade-off vs a `deliver` target: delivery
-depends on the agent running the skill, so the route prompt makes it a mandatory
-final step.
+which matches the agreed scope. Enable it with
+`hermes plugins enable gchat_webhook-platform`.
 
 ## Verified against the installed Hermes Agent v0.17.0
 
@@ -67,13 +75,16 @@ Confirmed by reading the installed source (`/usr/local/lib/hermes-agent`):
 - **Google Chat delivery** — the native `google_chat` platform plugin only does
   the Chat REST API via a service account (needs a GCP project + Pub/Sub), so it
   is not usable here. There is no generic HTTP/webhook `deliver` target either.
-  Hence delivery goes through the `notify-google-chat` skill → incoming webhook.
+  Hence the bundled `gchat_webhook` platform plugin → space incoming webhook.
+  **Verified end-to-end:** a signed OEM POST produced a full ~4 KB RCA that the
+  plugin delivered to the webhook URL (captured with a local HTTP listener).
+- **Webhook secret** — `${VAR}` interpolation is NOT applied to platform config
+  when the gateway runs under systemd (.env isn't in the process env at config
+  parse time). The route `secret:` must be the literal value (config.yaml is 0600).
 - **AWR truncation** — a named string field like `{awr_text}` is **not** truncated
   (`str(value)`); only `{__raw__}` (4000 chars) and dict/list fields (2000 chars)
   are. So full AWR text passes through. `awr_export.sh` still trims to ~60 KB to
   bound model cost.
-- **`${VAR}` interpolation** in config.yaml works (`_expand_env_vars`), so
-  `secret: ${WEBHOOK_SECRET}` resolves from `~/.hermes/.env`.
 - **Skills** install under `~/.hermes/skills/oracle/<name>/SKILL.md` and show as
   `enabled` in `hermes skills list`.
 - **Model** is already `provider: custom` → internal OpenAI-compatible endpoint;

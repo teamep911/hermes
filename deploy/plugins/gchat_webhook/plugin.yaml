@@ -1,0 +1,18 @@
+name: gchat_webhook-platform
+label: Google Chat (webhook)
+kind: platform
+version: 1.0.0
+description: >
+  Send-only Google Chat gateway adapter using a space INCOMING WEBHOOK URL.
+  No GCP project, service account or Pub/Sub required — unlike the native
+  google_chat plugin. Lets a gateway webhook route deliver full-text agent
+  output to a Google Chat space with `deliver: gchat_webhook`.
+
+  One-way only (Hermes cannot receive from an incoming webhook); intended for
+  alert/RCA notifications.
+author: teamep911
+requires_env:
+  - name: GOOGLE_CHAT_WEBHOOK_URL
+    description: "Google Chat space incoming-webhook URL (Apps & integrations -> Webhooks)."
+    prompt: "Google Chat incoming webhook URL"
+    password: true

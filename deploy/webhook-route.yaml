@@ -2,16 +2,23 @@
 # Do NOT copy it over the whole file — your config already has the model
 # (custom internal endpoint), memory and other settings that must stay.
 #
-# Verified against Hermes Agent v0.17.0:
+# Verified end-to-end on Hermes Agent v0.17.0 (see docs/ARCHITECTURE.md):
 #   - generic HMAC header is "X-Webhook-Signature" = hex(HMAC-SHA256(body))
-#   - ${VAR} env interpolation works, so `secret: ${WEBHOOK_SECRET}` is fine
 #   - named string fields (e.g. {awr_text}) are NOT truncated; only {__raw__}
 #     (4000 chars) and dict/list fields (2000 chars) are
 #
-# Delivery: Google Chat via the space INCOMING WEBHOOK (no GCP project). The
-# native google_chat plugin needs Pub/Sub+GCP, so instead the agent calls the
-# `notify-google-chat` skill, which POSTs to GOOGLE_CHAT_WEBHOOK_URL. The route
-# therefore delivers to `log` (the real delivery is done inside the agent run).
+# Secret: ${VAR} interpolation does NOT apply to platform config when the
+# gateway runs as a systemd service (it doesn't load .env into the process env
+# before parsing config). Put the secret LITERALLY here (config.yaml is 0600).
+#
+# Delivery: `deliver: gchat_webhook` uses the bundled-in-this-repo platform
+# plugin (deploy/plugins/gchat_webhook) which POSTs the full agent response to
+# a Google Chat space INCOMING WEBHOOK (no GCP project). Install + enable that
+# plugin and set GOOGLE_CHAT_WEBHOOK_URL in ~/.hermes/.env first.
+
+plugins:
+  enabled:
+    - gchat_webhook-platform        # the Google Chat incoming-webhook adapter
 
 platforms:
   webhook:
@@ -21,14 +28,12 @@ platforms:
       routes:
         oem-alert:
           events: []                      # accept any event on this route
-          secret: ${WEBHOOK_SECRET}       # required per route
-          skills: [alert-triage, oracle-rca, awr-summary, notify-google-chat]
+          secret: "PUT-YOUR-LITERAL-HMAC-SECRET-HERE"   # must match OEM side
+          skills: [alert-triage, oracle-rca, awr-summary]
           prompt: |
-            Bạn nhận một cảnh báo OEM Oracle (dữ liệu đã được che). Hãy:
-            1) Chọn skill phân tích phù hợp (alert-triage / oracle-rca /
-               awr-summary) và đưa ra RCA ngắn gọn, có hành động cụ thể.
-            2) BẮT BUỘC bước cuối: dùng skill `notify-google-chat` để gửi kết
-               quả vào Google Chat. Không được bỏ qua bước này.
+            Bạn nhận một cảnh báo OEM Oracle (dữ liệu đã được che). Chọn skill
+            phân tích phù hợp (alert-triage / oracle-rca / awr-summary) và đưa
+            ra RCA ngắn gọn, có hành động cụ thể. Trả lời bằng tiếng Việt.
 
             alert_type: {alert_type}
             target:     {target_name}
@@ -42,4 +47,6 @@ platforms:
 
             === AWR (đã cắt gọn, nếu có) ===
             {awr_text}
-          deliver: log
+          # Full agent response is POSTed to GOOGLE_CHAT_WEBHOOK_URL by the
+          # gchat_webhook platform plugin (deterministic, not agent-dependent).
+          deliver: gchat_webhook
