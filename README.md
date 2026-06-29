@@ -37,7 +37,7 @@ OEM host (Oracle · Linux)                Hermes Agent host (Linux VPS · hermes
 
 | Path | Role |
 |------|------|
-| `hermes/main.py` | FastAPI app: `/webhook/oem`, `/health`, `/google-chat/command` |
+| `hermes/main.py` | FastAPI app: `/webhook/oem`, `/health` |
 | `hermes/security/` | HMAC auth + redactor (masking) |
 | `hermes/llm/` | Provider router: Claude (default) → Gemini → OpenRouter |
 | `hermes/skills/` | `analyze_alert`, `rca_oracle`, `awr_summary` |

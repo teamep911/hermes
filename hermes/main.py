@@ -61,13 +61,9 @@ async def webhook_oem(
     return await process_alert(alert)
 
 
-@app.post("/google-chat/command")
-async def google_chat_command(request: Request) -> dict:
-    """Inbound slash-command / interaction events from Google Chat.
-
-    Placeholder for the reverse path (chat -> agent). Verify the Google
-    Chat bearer token here before dispatching commands.
-    """
-    payload = await request.json()
-    log.info("google_chat_command_received", type=payload.get("type"))
-    return {"text": "Hermes đã nhận lệnh (chưa triển khai xử lý)."}
+# NOTE: Delivery to Google Chat is ONE-WAY via an incoming webhook
+# (hermes/chat/google_chat.py). Incoming webhooks are send-only, so there is
+# deliberately no inbound endpoint for Chat events here. Enabling the reverse
+# path (slash commands / card clicks -> agent) would require registering a
+# Google Chat app with a service account + an HTTP-endpoint or Pub/Sub
+# connection. See docs/ARCHITECTURE.md ("Reverse path — future work").

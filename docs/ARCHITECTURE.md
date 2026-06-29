@@ -54,6 +54,27 @@ rate-limit, malformed response). Default chain: `claude → gemini → openroute
 - **systemd hardening:** `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=full`,
   `ProtectHome`.
 
+## Google Chat delivery is one-way (by design)
+
+Hermes delivers to Google Chat through an **incoming webhook URL**, which is
+**send-only**. There is intentionally no inbound endpoint for Chat events.
+
+### Reverse path — future work
+
+Receiving from Google Chat (slash commands, card-button clicks, threaded
+replies) is *not* possible with an incoming webhook. It requires registering a
+**Google Chat app** backed by a **service account**, connected via one of:
+
+- **HTTP endpoint** — Google POSTs events to a public `…/google-chat/events`
+  URL; the agent verifies the Bearer JWT (audience = project/app) and replies
+  via the Chat API.
+- **Pub/Sub** — Google publishes events to a topic; the agent pulls them, so no
+  extra public ingress is needed.
+
+Either way the agent would also need a service account to call
+`spaces.messages.create` for asynchronous replies. Until then the flow is
+strictly OEM → Hermes → Google Chat.
+
 ## What changed from the legacy `agent_gcp`
 
 | Legacy | Hermes |
