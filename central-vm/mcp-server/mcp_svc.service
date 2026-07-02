@@ -1,0 +1,22 @@
+[Unit]
+Description=Hermes MCP server (DDS/META read-only tools — Luồng B)
+After=network-online.target postgresql-17.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mcp_svc
+Group=mcp_svc
+EnvironmentFile=/opt/mcp/db.env
+Environment=MCP_HOST=127.0.0.1
+Environment=MCP_PORT=9000
+ExecStart=/opt/mcp/venv/bin/python /opt/mcp/server.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
