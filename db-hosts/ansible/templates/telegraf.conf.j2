@@ -1,0 +1,44 @@
+# Telegraf config (rendered by Ansible per DB host). Pushes to central VM InfluxDB every 15s.
+[agent]
+  interval = "15s"
+  flush_interval = "15s"
+  hostname = "{{ instance_name }}"
+  omit_hostname = false
+
+[[outputs.influxdb_v2]]
+  urls = ["{{ influx_url }}"]
+  token = "{{ influx_token }}"
+  organization = "{{ influx_org }}"
+  bucket = "{{ influx_bucket }}"
+
+# Tag every metric with the logical instance name so the normalizer/MCP can key on it.
+[global_tags]
+  instance = "{{ instance_name }}"
+
+{% if db_type == 'oracle' %}
+# Oracle has no official input plugin — use exec + SQL*Plus script.
+[[inputs.exec]]
+  commands = ["/opt/telegraf/oracle_metrics.sh"]
+  timeout = "10s"
+  data_format = "influx"
+  environment = ["ORACLE_HOME={{ oracle_home }}", "ORACLE_SID={{ oracle_sid }}", "INSTANCE_NAME={{ instance_name }}"]
+{% elif db_type == 'postgres' %}
+[[inputs.postgresql]]
+  address = "host=localhost user={{ pg_monitor_user }} password={{ pg_monitor_password }} sslmode=disable dbname=postgres"
+{% elif db_type == 'mysql' %}
+[[inputs.mysql]]
+  servers = ["{{ mysql_monitor_user }}:{{ mysql_monitor_password }}@tcp(127.0.0.1:3306)/"]
+{% elif db_type == 'mongodb' %}
+[[inputs.mongodb]]
+  servers = ["mongodb://127.0.0.1:27017"]
+{% elif db_type == 'sqlserver' %}
+[[inputs.sqlserver]]
+  servers = ["Server=127.0.0.1;Port=1433;User Id={{ mssql_user }};Password={{ mssql_password }};app name=telegraf;log=1;"]
+{% endif %}
+
+# Host basics for every DB server.
+[[inputs.cpu]]
+  percpu = false
+  totalcpu = true
+[[inputs.mem]]
+[[inputs.disk]]

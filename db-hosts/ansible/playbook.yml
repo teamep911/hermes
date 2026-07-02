@@ -1,0 +1,58 @@
+---
+# Deploy Telegraf to 30-100 DB hosts (Luồng B). Idempotent.
+# Usage:
+#   ansible-playbook -i inventory.ini playbook.yml
+# Per-host vars (in inventory): instance_name, db_type, and DB-type extras
+# (oracle_home/oracle_sid, pg_monitor_user/password, ...). Group vars hold the
+# central InfluxDB coordinates + token.
+- name: Install and configure Telegraf on DB hosts
+  hosts: db_hosts
+  become: true
+  vars:
+    influx_url: "{{ central_influx_url }}"      # e.g. http://10.0.0.10:8086
+    influx_org: "central"
+    influx_bucket: "metrics"
+    influx_token: "{{ telegraf_write_token }}"  # keep in ansible-vault, not plaintext
+  tasks:
+    - name: Add InfluxData repo
+      ansible.builtin.yum_repository:
+        name: influxdata
+        description: InfluxData
+        baseurl: https://repos.influxdata.com/stable/$basearch/main
+        gpgcheck: true
+        gpgkey: https://repos.influxdata.com/influxdata-archive.key
+
+    - name: Install Telegraf
+      ansible.builtin.package:
+        name: telegraf
+        state: present
+
+    - name: Deploy Oracle metrics script (oracle hosts only)
+      when: db_type == 'oracle'
+      ansible.builtin.copy:
+        src: ../../db-hosts/scripts/oracle_metrics.sh
+        dest: /opt/telegraf/oracle_metrics.sh
+        mode: "0750"
+        owner: telegraf
+        group: telegraf
+
+    - name: Render Telegraf config
+      ansible.builtin.template:
+        src: templates/telegraf.conf.j2
+        dest: /etc/telegraf/telegraf.conf
+        mode: "0640"
+        owner: telegraf
+        group: telegraf
+      notify: restart telegraf
+
+    - name: Enable + start Telegraf
+      ansible.builtin.service:
+        name: telegraf
+        state: started
+        enabled: true
+
+  handlers:
+    - name: restart telegraf
+      ansible.builtin.service:
+        name: telegraf
+        state: restarted

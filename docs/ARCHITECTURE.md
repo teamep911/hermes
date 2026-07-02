@@ -1,4 +1,10 @@
-# Architecture
+# Architecture — Hermes / Luồng A detail
+
+> This document covers the **Hermes Agent + webhook (Luồng A)** component. The
+> overall multi-host design is [architecture_option2.md](architecture_option2.md);
+> the central VM as-built is [../central-vm/README.md](../central-vm/README.md).
+> Paths moved under `central-vm/hermes/` and `oem-host/scripts/` in the Option 2
+> restructure.
 
 ## Decision: deploy Nous Hermes Agent, don't rebuild it
 

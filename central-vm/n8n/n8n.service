@@ -1,0 +1,26 @@
+[Unit]
+Description=n8n workflow engine (Hermes actions/automation)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=n8n_svc
+Group=n8n_svc
+Environment=N8N_HOST=127.0.0.1
+Environment=N8N_PORT=5678
+Environment=N8N_PROTOCOL=http
+Environment=N8N_USER_FOLDER=/opt/n8n
+Environment=N8N_DIAGNOSTICS_ENABLED=false
+Environment=N8N_RUNNERS_ENABLED=true
+Environment=GENERIC_TIMEZONE=Asia/Ho_Chi_Minh
+# Bind to localhost only; front with the VM firewall / reverse proxy if exposed.
+ExecStart=/usr/local/bin/n8n start
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/opt/n8n
+
+[Install]
+WantedBy=multi-user.target

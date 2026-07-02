@@ -1,0 +1,11 @@
+[Unit]
+Description=Run DDS normalization every minute
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=10s
+Unit=normalize.service
+
+[Install]
+WantedBy=timers.target

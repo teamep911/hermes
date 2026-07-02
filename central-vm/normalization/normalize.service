@@ -1,0 +1,15 @@
+[Unit]
+Description=DDS normalization job (InfluxDB -> DDS.metric_rollup)
+After=network-online.target postgresql-17.service influxdb.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=dds_db
+Group=dds_db
+EnvironmentFile=/opt/dds/db.env
+ExecStart=/opt/dds/venv/bin/python /opt/dds/normalize.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
